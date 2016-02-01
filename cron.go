@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+// A common remove method,
+// return true when you find match in entries
+type RemoveFunc func(e *Entry) bool
+
 // Cron keeps track of any number of entries, invoking the associated func as
 // specified by the schedule. It may be started, stopped, and the entries may
 // be inspected while running.
@@ -14,6 +18,7 @@ type Cron struct {
 	entries  []*Entry
 	stop     chan struct{}
 	add      chan *Entry
+	remove   chan RemoveFunc
 	snapshot chan []*Entry
 	running  bool
 }
@@ -71,6 +76,7 @@ func New() *Cron {
 	return &Cron{
 		entries:  nil,
 		add:      make(chan *Entry),
+		remove:   make(chan RemoveFunc),
 		stop:     make(chan struct{}),
 		snapshot: make(chan []*Entry),
 		running:  false,
@@ -95,6 +101,11 @@ func (c *Cron) AddJob(spec string, cmd Job) error {
 	}
 	c.Schedule(schedule, cmd)
 	return nil
+}
+
+// RemoveJob remove the job which match the func matchFunc
+func (c *Cron) RemoveJob(removeFunc RemoveFunc) {
+	c.remove <- removeFunc
 }
 
 // Schedule adds a Job to the Cron to be run on the given schedule.
@@ -165,6 +176,15 @@ func (c *Cron) run() {
 		case newEntry := <-c.add:
 			c.entries = append(c.entries, newEntry)
 			newEntry.Next = newEntry.Schedule.Next(now)
+
+		case removeFunc := <-c.remove:
+			newEntries := make([]*Entry, 0)
+			for _, e := range c.entries {
+				if !removeFunc(e) {
+					newEntries = append(newEntries, e)
+				}
+			}
+			c.entries = newEntries
 
 		case <-c.snapshot:
 			c.snapshot <- c.entrySnapshot()
